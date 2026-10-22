@@ -1,0 +1,159 @@
+---
+- name: Verify Kubernetes node prerequisites
+  hosts: k8s_cluster
+  gather_facts: true
+  become: true
+  tasks:
+    - name: Check kubeadm is installed
+      ansible.builtin.command: kubeadm version
+      register: kubeadm_version
+      retries: 30
+      delay: 10
+      until: kubeadm_version.rc == 0
+      changed_when: false
+
+    - name: Check containerd is running
+      ansible.builtin.command: systemctl is-active containerd
+      register: containerd_status
+      retries: 30
+      delay: 10
+      until: containerd_status.rc == 0
+      changed_when: false
+
+- name: Initialise Kubernetes control plane
+  hosts: k8s_master
+  gather_facts: true
+  become: true
+  vars:
+    pod_network_cidr: "10.244.0.0/16"
+    kubeconfig_path: /home/ubuntu/.kube/config
+    flannel_manifest_url: https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml
+  tasks:
+    - name: Check whether control plane is already initialised
+      ansible.builtin.stat:
+        path: /etc/kubernetes/admin.conf
+      register: admin_conf
+
+    - name: Run kubeadm init
+      ansible.builtin.command:
+        cmd: >-
+          kubeadm init
+          --pod-network-cidr={{ pod_network_cidr }}
+          --apiserver-advertise-address={{ ansible_default_ipv4.address }}
+      when: not admin_conf.stat.exists
+
+    - name: Create ubuntu kubeconfig directory
+      ansible.builtin.file:
+        path: /home/ubuntu/.kube
+        state: directory
+        owner: ubuntu
+        group: ubuntu
+        mode: "0700"
+
+    - name: Install kubeconfig for ubuntu user
+      ansible.builtin.copy:
+        src: /etc/kubernetes/admin.conf
+        dest: "{{ kubeconfig_path }}"
+        remote_src: true
+        owner: ubuntu
+        group: ubuntu
+        mode: "0600"
+
+    - name: Wait for Kubernetes API server
+      ansible.builtin.command:
+        cmd: kubectl --kubeconfig={{ kubeconfig_path }} get nodes
+      become: false
+      register: kubectl_nodes
+      retries: 30
+      delay: 5
+      until: kubectl_nodes.rc == 0
+      changed_when: false
+
+    - name: Check whether Flannel CNI is already installed
+      ansible.builtin.command:
+        cmd: kubectl --kubeconfig={{ kubeconfig_path }} -n kube-flannel get daemonset kube-flannel-ds
+      become: false
+      register: flannel_ds
+      failed_when: false
+      changed_when: false
+
+    - name: Install Flannel CNI
+      ansible.builtin.command:
+        cmd: kubectl --kubeconfig={{ kubeconfig_path }} apply -f {{ flannel_manifest_url }}
+      become: false
+      register: flannel_apply
+      retries: 10
+      delay: 10
+      until: flannel_apply.rc == 0
+      when: flannel_ds.rc != 0
+      changed_when: "'created' in flannel_apply.stdout or 'configured' in flannel_apply.stdout"
+
+    - name: Create worker join command
+      ansible.builtin.command: kubeadm token create --print-join-command
+      changed_when: false
+      register: join_command
+
+    - name: Store worker join command for worker plays
+      ansible.builtin.set_fact:
+        kubeadm_join_command: "{{ join_command.stdout }}"
+
+- name: Join Kubernetes worker nodes
+  hosts: k8s_workers
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Check whether worker already joined the cluster
+      ansible.builtin.stat:
+        path: /etc/kubernetes/kubelet.conf
+      register: kubelet_conf
+
+    - name: Join worker to control plane
+      ansible.builtin.command:
+        cmd: "{{ hostvars[groups['k8s_master'][0]].kubeadm_join_command }}"
+      register: worker_join
+      retries: 5
+      delay: 10
+      until: worker_join.rc == 0
+      when: not kubelet_conf.stat.exists
+
+- name: Deploy CloudEco application manifests
+  hosts: k8s_master
+  gather_facts: false
+  vars:
+    kubeconfig_path: /home/ubuntu/.kube/config
+    manifest_src: "{{ playbook_dir }}/../k8s/"
+    manifest_dest: /home/ubuntu/cloudeco-k8s
+  tasks:
+    - name: Wait for all nodes to become Ready
+      ansible.builtin.command:
+        cmd: kubectl --kubeconfig={{ kubeconfig_path }} wait --for=condition=Ready nodes --all --timeout=180s
+      changed_when: false
+
+    - name: Copy Kubernetes manifests to control plane
+      ansible.builtin.copy:
+        src: "{{ manifest_src }}"
+        dest: "{{ manifest_dest }}"
+        owner: ubuntu
+        group: ubuntu
+        mode: preserve
+
+    - name: Apply Kubernetes manifests
+      ansible.builtin.command:
+        cmd: kubectl --kubeconfig={{ kubeconfig_path }} apply -f {{ manifest_dest }}
+      register: apply_manifests
+      changed_when: "'created' in apply_manifests.stdout or 'configured' in apply_manifests.stdout"
+
+    - name: Wait for API deployment rollout
+      ansible.builtin.command:
+        cmd: kubectl --kubeconfig={{ kubeconfig_path }} rollout status deployment/cloudeco-waste-api -n cloudeco --timeout=180s
+      changed_when: false
+
+    - name: Show deployed pods
+      ansible.builtin.command:
+        cmd: kubectl --kubeconfig={{ kubeconfig_path }} get pods -n cloudeco -o wide
+      changed_when: false
+      register: deployed_pods
+
+    - name: Print deployed pods
+      ansible.builtin.debug:
+        var: deployed_pods.stdout_lines

@@ -1,0 +1,60 @@
+# Python virtual env / cache
+
+.venv/
+venv/
+env/
+**pycache**/
+_.pyc
+_.pyo
+\*.pyd
+.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# macOS
+
+.DS_Store
+
+# Git
+
+.git
+.gitignore
+
+# Local env / secrets
+
+.env
+.env.\*
+
+# Logs
+
+\*.log
+benchmark_logs/
+
+# Dev / infra / docs not needed in runtime image build
+
+locust/
+ansible/
+terraform/
+k8s/
+reference/
+runs/
+samples/
+scripts/
+README.md
+requirements-dev.txt
+
+# Model export artifacts not used by the PyTorch runtime image
+
+models/_.onnx
+models/_\_openvino_model/
+models/.DS_Store
+
+# notebooks
+
+\*.ipynb
+
+# Local editor files
+
+.vscode/
+.idea/

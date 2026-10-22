@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+set -euxo pipefail
+
+if [ -f /var/lib/cloudeco-bootstrap.done ]; then
+  exit 0
+fi
+
+export DEBIAN_FRONTEND=noninteractive
+
+swapoff -a || true
+sed -i '/ swap / s/^\(.*\)$/#\1/g' /etc/fstab
+
+modprobe overlay
+modprobe br_netfilter
+
+cat >/etc/modules-load.d/k8s.conf <<'EOF'
+overlay
+br_netfilter
+EOF
+
+cat >/etc/sysctl.d/99-kubernetes-cri.conf <<'EOF'
+net.bridge.bridge-nf-call-iptables = 1
+net.bridge.bridge-nf-call-ip6tables = 1
+net.ipv4.ip_forward = 1
+EOF
+
+sysctl --system
+
+apt-get update
+apt-get install -y apt-transport-https ca-certificates curl gpg conntrack
+
+install -m 0755 -d /etc/apt/keyrings
+
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+chmod a+r /etc/apt/keyrings/docker.gpg
+
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
+  >/etc/apt/sources.list.d/docker.list
+
+curl -fsSL https://pkgs.k8s.io/core:/stable:/${kubernetes_version}/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+chmod a+r /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+
+echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/${kubernetes_version}/deb/ /" \
+  >/etc/apt/sources.list.d/kubernetes.list
+
+apt-get update
+apt-get install -y containerd.io kubelet kubeadm kubectl
+apt-mark hold containerd.io kubelet kubeadm kubectl
+
+mkdir -p /etc/containerd
+containerd config default >/etc/containerd/config.toml
+sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
+sed -i '/disabled_plugins/d' /etc/containerd/config.toml
+
+systemctl daemon-reload
+systemctl enable --now containerd
+systemctl restart containerd
+systemctl enable kubelet
+
+touch /var/lib/cloudeco-bootstrap.done

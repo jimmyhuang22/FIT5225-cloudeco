@@ -1,0 +1,80 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cloudeco-waste-api
+  namespace: cloudeco
+  labels:
+    app: cloudeco-waste-api
+    app.kubernetes.io/name: cloudeco-waste-api
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  progressDeadlineSeconds: 180
+  selector:
+    matchLabels:
+      app: cloudeco-waste-api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: cloudeco-waste-api
+        app.kubernetes.io/name: cloudeco-waste-api
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: api
+          image: australia-southeast1-docker.pkg.dev/sigma-icon-489807-g5/fit5225-a1-repo/cloudeco-waste-api:v13
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          env:
+            - name: MODEL_PATH
+              value: /app/models/best_model.pt
+            - name: INFERENCE_MAX_WORKERS
+              value: "1"
+            - name: IMGSZ
+              value: "256"
+            - name: CONF_THRESHOLD
+              value: "0.10"
+            - name: MAX_DET
+              value: "20"
+            - name: ANNOTATION_MAX_SIDE
+              value: "320"
+            - name: JPEG_QUALITY
+              value: "50"
+          resources:
+            requests:
+              cpu: "1"
+              memory: 768Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          startupProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 2
+            timeoutSeconds: 1
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3

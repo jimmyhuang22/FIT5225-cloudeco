@@ -1,0 +1,16 @@
+project_id = "your-gcp-project-id"
+
+region = "australia-southeast1"
+zone   = "australia-southeast1-a"
+
+admin_cidr         = "YOUR_PUBLIC_IP/32"
+ssh_public_key_path = "~/.ssh/id_ed25519.pub"
+
+artifact_registry_location   = "australia-southeast1"
+artifact_registry_repository = "fit5225-a1-repo"
+
+app_nodeport = 30080
+
+# Set true if you want terraform apply to run the Ansible cluster bootstrap
+# and application deployment after the three VMs are created.
+run_cluster_bootstrap = true
